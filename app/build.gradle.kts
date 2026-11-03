@@ -10,19 +10,23 @@ android {
 
     signingConfigs {
         getByName("debug") {
-            storeFile = file("debug.keystore")
-            storePassword = "android"
-            keyAlias = "androiddebugkey"
-            keyPassword = "android"
+            val ks = file("debug.keystore")
+            if (ks.exists()) {
+                storeFile = ks
+                storePassword = "android"
+                keyAlias = "androiddebugkey"
+                keyPassword = "android"
+            }
         }
     }
+
     defaultConfig {
         applicationId = "com.professorx.mediadl"
         minSdk = 29
         targetSdk = 34
-        versionCode = 2
-        versionName = "1.1"
-        ndk { abiFilters += listOf("arm64-v8a", "armeabi-v7a") }
+        versionCode = 3
+        versionName = "1.2"
+        ndk { abiFilters += listOf("arm64-v8a") }
     }
     buildFeatures { compose = true }
     compileOptions {
