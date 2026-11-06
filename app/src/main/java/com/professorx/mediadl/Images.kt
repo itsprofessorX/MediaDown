@@ -15,6 +15,9 @@ object Images {
     private val og1 = Regex("<meta[^>]+(?:property|name)=[\"'](?:og:image(?::secure_url)?|twitter:image)[\"'][^>]*content=[\"']([^\"']+)[\"']", RegexOption.IGNORE_CASE)
     private val og2 = Regex("<meta[^>]+content=[\"']([^\"']+)[\"'][^>]*(?:property|name)=[\"'](?:og:image(?::secure_url)?|twitter:image)[\"']", RegexOption.IGNORE_CASE)
     private val pinSize = Regex("/\\d+x(?:\\d+)?/")
+    private val igCode = Regex("instagram\\.com/(?:[^/?#]+/)?(?:p|reel|reels|tv)/([A-Za-z0-9_-]+)")
+    private val igDisplay = Regex("display_url\\\\*\"\\s*:\\s*\\\\*\"(https:[^\"]+?)\\\\*\"")
+    private val igImg = Regex("<img[^>]+class=\"[^\"]*EmbeddedMediaImage[^\"]*\"[^>]*src=\"([^\"]+)\"", RegexOption.IGNORE_CASE)
 
     fun find(link: String): List<String> {
         val l = link.lowercase()
@@ -23,6 +26,10 @@ object Images {
             val t = tweetPhotos(link)
             if (!t.isNullOrEmpty()) return t
         }
+        if ("instagram.com" in l || "instagr.am" in l) {
+            val ig = instagram(link)
+            if (ig.isNotEmpty()) return ig
+        }
         val html = http(link, UA_BOT) ?: return emptyList()
         return (og1.findAll(html) + og2.findAll(html))
             .map { it.groupValues[1].replace("&amp;", "&") }
@@ -30,6 +37,25 @@ object Images {
             .filter { it.startsWith("http") }
             .distinct().toList()
     }
+
+    /** Full-size, uncropped photos (and every carousel photo) from the public embed page. */
+    private fun instagram(link: String): List<String> {
+        val code = igCode.find(link)?.groupValues?.get(1) ?: return emptyList()
+        val html = http("https://www.instagram.com/p/$code/embed/captioned/", UA_WEB) ?: return emptyList()
+        val fromJson = igDisplay.findAll(html)
+            .map { unescape(it.groupValues[1]) }
+            .filter { it.startsWith("http") }
+            .distinct().toList()
+        if (fromJson.isNotEmpty()) return fromJson
+        return igImg.findAll(html)
+            .map { it.groupValues[1].replace("&amp;", "&") }
+            .distinct().toList()
+    }
+
+    private fun unescape(s: String) = s
+        .replace("\\\\u0026", "&").replace("\\u0026", "&")
+        .replace("\\\\/", "/").replace("\\/", "/")
+        .replace("&amp;", "&").replace("\\", "")
 
     private fun tweetPhotos(link: String): List<String>? {
         val id = tweetId.find(link)?.groupValues?.get(1) ?: return null
