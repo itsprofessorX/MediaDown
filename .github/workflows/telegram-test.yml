@@ -1,0 +1,18 @@
+name: Telegram test
+on: workflow_dispatch
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    env:
+      TG_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+      TG_CHAT: ${{ secrets.TELEGRAM_CHAT_ID }}
+    steps:
+      - name: Send test message
+        run: |
+          if [ -z "$TG_TOKEN" ] || [ -z "$TG_CHAT" ]; then
+            echo "::error::Secrets missing. Add TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_ID."
+            exit 1
+          fi
+          R=$(curl -sS -d chat_id="$TG_CHAT" -d text="MediaDown build bot is connected" "https://api.telegram.org/bot${TG_TOKEN}/sendMessage")
+          echo "Telegram replied: $R"
+          echo "$R" | grep -q '"ok":true' || { echo "::error::Telegram rejected the message."; exit 1; }

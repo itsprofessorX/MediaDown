@@ -102,7 +102,7 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun handleShare(i: Intent?) {
-        if (i?.action == Intent.ACTION_SEND) i.getStringExtra(Intent.EXTRA_TEXT)?.let { vm.url = it }
+        if (i?.action == Intent.ACTION_SEND) i.getStringExtra(Intent.EXTRA_TEXT)?.let { vm.onShared(it) }
     }
 }
 
@@ -196,6 +196,9 @@ fun Screen(vm: DlViewModel) {
                 TextButton(onClick = { tools = !tools }) { Text(if (tools) "Tools  ▴" else "Tools  ▾", color = Muted) }
                 AnimatedVisibility(tools) {
                     Column {
+                        TextButton(onClick = { vm.toggleAuto() }) {
+                            Text(if (vm.autoShare) "Auto-download on Share: ON" else "Auto-download on Share: OFF", color = Color.White)
+                        }
                         TextButton(onClick = { vm.forceUpdate() }, enabled = vm.ready && !vm.busy) { Text("Update engine now", color = Color.White) }
                         TextButton(onClick = { picker.launch(arrayOf("text/*", "application/octet-stream")) }) { Text("Import cookies.txt", color = Color.White) }
                         if (vm.hasCookies) TextButton(onClick = { vm.removeCookies() }) { Text("Remove cookies", color = Muted) }

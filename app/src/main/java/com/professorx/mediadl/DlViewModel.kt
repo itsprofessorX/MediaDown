@@ -20,6 +20,8 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import java.io.File
+import org.json.JSONArray
+import org.json.JSONObject
 import kotlin.math.abs
 
 data class Saved(val name: String, val uri: Uri, val mime: String)
@@ -35,6 +37,9 @@ class DlViewModel(private val app: Application) : AndroidViewModel(app) {
     var ready by mutableStateOf(false)
     var hasCookies by mutableStateOf(false)
     val history = mutableStateListOf<Saved>()
+    private val prefs = app.getSharedPreferences("mediadown", 0)
+    var autoShare by mutableStateOf(prefs.getBoolean("auto", true))
+    private var pendingShare = false
 
     private val cookies get() = File(app.filesDir, "cookies.txt")
     private val processId = "dl-main"
@@ -44,6 +49,7 @@ class DlViewModel(private val app: Application) : AndroidViewModel(app) {
     private var lastError = ""
 
     init {
+        loadHistory()
         viewModelScope.launch(Dispatchers.IO) {
             try {
                 YoutubeDL.getInstance().init(app)
@@ -51,6 +57,7 @@ class DlViewModel(private val app: Application) : AndroidViewModel(app) {
                 hasCookies = cookies.exists()
                 ready = true
                 status = "Ready"
+                if (pendingShare) { pendingShare = false; download(false) }
                 updateEngine() // auto-refresh yt-dlp every time the app opens
             } catch (e: Throwable) {
                 status = "Engine failed to start: ${e.message}"
@@ -69,6 +76,33 @@ class DlViewModel(private val app: Application) : AndroidViewModel(app) {
             engine = "Engine update skipped"
             false
         }
+    }
+
+    /** Link arrived from another app's Share menu. */
+    fun onShared(text: String) {
+        url = text
+        if (autoShare) { if (ready) download(false) else pendingShare = true }
+    }
+
+    fun toggleAuto() {
+        autoShare = !autoShare
+        prefs.edit().putBoolean("auto", autoShare).apply()
+    }
+
+    private fun loadHistory() {
+        try {
+            val arr = JSONArray(prefs.getString("history", "[]"))
+            for (i in 0 until arr.length()) {
+                val o = arr.getJSONObject(i)
+                history.add(Saved(o.getString("n"), Uri.parse(o.getString("u")), o.getString("m")))
+            }
+        } catch (_: Exception) {}
+    }
+
+    private fun saveHistory() {
+        val arr = JSONArray()
+        history.take(60).forEach { arr.put(JSONObject().put("n", it.name).put("u", it.uri.toString()).put("m", it.mime)) }
+        prefs.edit().putString("history", arr.toString()).apply()
     }
 
     fun forceUpdate() { viewModelScope.launch(Dispatchers.IO) { if (ready && !busy) updateEngine() } }
@@ -182,7 +216,7 @@ class DlViewModel(private val app: Application) : AndroidViewModel(app) {
     }
 
     private fun runImages(link: String, dir: File): Int {
-        val urls = Images.find(link)
+        val urls = Images.find(link, if (cookies.exists()) cookies else null)
         if (urls.isEmpty()) return 0
         indeterminate = false; progress = 0f; stage = if (urls.size > 1) "${urls.size} photos" else ""
         var n = 0
@@ -239,5 +273,6 @@ class DlViewModel(private val app: Application) : AndroidViewModel(app) {
         values.clear(); values.put(MediaStore.MediaColumns.IS_PENDING, 0)
         resolver.update(uri, values, null, null)
         history.add(0, Saved(f.name, uri, mime))
+        saveHistory()
     }
 }
