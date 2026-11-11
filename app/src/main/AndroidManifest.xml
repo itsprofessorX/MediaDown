@@ -8,6 +8,7 @@
         android:extractNativeLibs="true"
         android:usesCleartextTraffic="true"
         android:theme="@style/Theme.MediaDown">
+        <activity android:name=".IgLoginActivity" android:exported="false" />
         <activity
             android:name=".MainActivity"
             android:exported="true"

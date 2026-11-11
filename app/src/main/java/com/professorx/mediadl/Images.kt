@@ -141,7 +141,7 @@ object Images {
     }
 
     /** Builds a Cookie header from the imported Netscape cookies.txt (instagram.com only). */
-    private fun cookieHeader(f: File?): String? {
+    fun cookieHeader(f: File?): String? {
         if (f == null || !f.exists()) return null
         val pairs = f.readLines().mapNotNull { raw ->
             val line = raw.removePrefix("#HttpOnly_")
@@ -185,14 +185,15 @@ object Images {
             c.setRequestProperty("User-Agent", UA_WEB)
             if (c.responseCode !in 200..299) return null
             val type = c.contentType.orEmpty().lowercase()
-            if (!type.startsWith("image")) return null
+            if (!type.startsWith("image") && !type.startsWith("video")) return null
             val ext = when {
+                "video" in type -> "mp4"
                 "png" in type -> "png"
                 "webp" in type -> "webp"
                 "gif" in type -> "gif"
                 else -> "jpg"
             }
-            val out = File(dir, "img_${i + 1}.$ext")
+            val out = File(dir, "item_${i + 1}.$ext")
             val total = c.contentLengthLong
             var read = 0L
             c.inputStream.use { ins ->

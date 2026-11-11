@@ -128,6 +128,8 @@ fun Screen(vm: DlViewModel) {
     var audio by remember { mutableStateOf(false) }
     var tools by remember { mutableStateOf(false) }
     val picker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { u -> u?.let { vm.importCookies(it) } }
+    val login = rememberLauncherForActivityResult(ActivityResultContracts.StartActivityForResult()) { vm.refreshCookies() }
+    val startLogin = { login.launch(Intent(ctx, IgLoginActivity::class.java)) }
     val site = platformOf(vm.url)
     val canGo = vm.ready && !vm.busy && vm.url.isNotBlank()
 
@@ -165,6 +167,13 @@ fun Screen(vm: DlViewModel) {
                     Spacer(Modifier.weight(1f))
                     if (site != null) Text(site, color = Accent, fontSize = 13.sp)
                 }
+                if (site == "Instagram" && !vm.igLoggedIn) {
+                    Text(
+                        "Log in to Instagram for all carousel photos, videos & stories  ›",
+                        color = Accent, fontSize = 12.sp,
+                        modifier = Modifier.clickable { startLogin() }.padding(top = 2.dp, bottom = 2.dp)
+                    )
+                }
             }
         }
 
@@ -196,12 +205,15 @@ fun Screen(vm: DlViewModel) {
                 TextButton(onClick = { tools = !tools }) { Text(if (tools) "Tools  ▴" else "Tools  ▾", color = Muted) }
                 AnimatedVisibility(tools) {
                     Column {
+                        TextButton(onClick = { startLogin() }) {
+                            Text(if (vm.igLoggedIn) "Instagram: connected ✓  (tap to re-login)" else "Log in to Instagram", color = Color.White)
+                        }
                         TextButton(onClick = { vm.toggleAuto() }) {
                             Text(if (vm.autoShare) "Auto-download on Share: ON" else "Auto-download on Share: OFF", color = Color.White)
                         }
                         TextButton(onClick = { vm.forceUpdate() }, enabled = vm.ready && !vm.busy) { Text("Update engine now", color = Color.White) }
                         TextButton(onClick = { picker.launch(arrayOf("text/*", "application/octet-stream")) }) { Text("Import cookies.txt", color = Color.White) }
-                        if (vm.hasCookies) TextButton(onClick = { vm.removeCookies() }) { Text("Remove cookies", color = Muted) }
+                        if (vm.hasCookies) TextButton(onClick = { vm.removeCookies() }) { Text("Log out / remove cookies", color = Muted) }
                     }
                 }
             }

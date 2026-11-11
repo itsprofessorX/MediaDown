@@ -36,6 +36,7 @@ class DlViewModel(private val app: Application) : AndroidViewModel(app) {
     var busy by mutableStateOf(false)
     var ready by mutableStateOf(false)
     var hasCookies by mutableStateOf(false)
+    var igLoggedIn by mutableStateOf(false)
     val history = mutableStateListOf<Saved>()
     private val prefs = app.getSharedPreferences("mediadown", 0)
     var autoShare by mutableStateOf(prefs.getBoolean("auto", true))
@@ -54,7 +55,7 @@ class DlViewModel(private val app: Application) : AndroidViewModel(app) {
             try {
                 YoutubeDL.getInstance().init(app)
                 FFmpeg.getInstance().init(app)
-                hasCookies = cookies.exists()
+                refreshCookies()
                 ready = true
                 status = "Ready"
                 if (pendingShare) { pendingShare = false; download(false) }
@@ -111,13 +112,23 @@ class DlViewModel(private val app: Application) : AndroidViewModel(app) {
         viewModelScope.launch(Dispatchers.IO) {
             try {
                 app.contentResolver.openInputStream(src)?.use { i -> cookies.outputStream().use { o -> i.copyTo(o) } }
-                hasCookies = true
+                refreshCookies()
                 status = "Cookies imported."
             } catch (e: Throwable) { status = "Cookie import failed: ${e.message}" }
         }
     }
 
-    fun removeCookies() { cookies.delete(); hasCookies = false; status = "Cookies removed." }
+    fun removeCookies() {
+        cookies.delete(); hasCookies = false; igLoggedIn = false
+        try { android.webkit.CookieManager.getInstance().removeAllCookies(null) } catch (_: Throwable) {}
+        status = "Logged out / cookies removed."
+    }
+
+    fun refreshCookies() {
+        hasCookies = cookies.exists()
+        igLoggedIn = hasCookies && try { cookies.readText().contains("sessionid") } catch (_: Exception) { false }
+        if (igLoggedIn && ready) status = "Instagram connected."
+    }
 
     fun cancel() {
         cancelled = true
@@ -150,6 +161,10 @@ class DlViewModel(private val app: Application) : AndroidViewModel(app) {
         for (attempt in 0..1) {
             val dir = File(app.cacheDir, "dl_${System.nanoTime()}").apply { mkdirs() }
             try {
+                if (igLoggedIn && !audio && Instagram.isInstagram(link)) {
+                    val g = try { runInstagram(link, dir) } catch (_: Throwable) { 0 }
+                    if (g > 0) { dir.deleteRecursively(); return g }
+                }
                 val n = runYtDlp(link, audio, dir)
                 if (n > 0) { dir.deleteRecursively(); return n }
                 lastError = "🤔 No media found at that link."
@@ -215,10 +230,14 @@ class DlViewModel(private val app: Application) : AndroidViewModel(app) {
         saveAll(mediaFiles(dir))
     }
 
-    private fun runImages(link: String, dir: File): Int {
-        val urls = Images.find(link, if (cookies.exists()) cookies else null)
+    private fun runImages(link: String, dir: File): Int =
+        runUrls(Images.find(link, if (cookies.exists()) cookies else null), dir)
+
+    private fun runInstagram(link: String, dir: File): Int = runUrls(Instagram.resolve(link, cookies), dir)
+
+    private fun runUrls(urls: List<String>, dir: File): Int {
         if (urls.isEmpty()) return 0
-        indeterminate = false; progress = 0f; stage = if (urls.size > 1) "${urls.size} photos" else ""
+        indeterminate = false; progress = 0f; stage = if (urls.size > 1) "${urls.size} items" else ""
         var n = 0
         urls.forEachIndexed { i, u ->
             val f = Images.download(u, dir, i) { frac ->
