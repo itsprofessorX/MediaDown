@@ -1,7 +1,7 @@
 
 <div align="center">
 
-# MediaDown
+# MediaDown By ProFessor
 
 ### Your Instagram Media Downloader
 
