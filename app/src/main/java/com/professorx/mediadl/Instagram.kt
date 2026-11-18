@@ -25,7 +25,7 @@ object Instagram {
     }
 
     /** Returns direct media URLs (photos and videos) or an empty list. */
-    fun resolve(link: String, cookieFile: File): List<String> {
+    fun resolve(link: String, cookieFile: File): List<MediaItem> {
         val cookie = Images.cookieHeader(cookieFile) ?: return emptyList()
         val csrf = Regex("csrftoken=([^;]+)").find(cookie)?.groupValues?.get(1)
         val h = mutableMapOf(
@@ -48,16 +48,19 @@ object Instagram {
     }
 
     // ------------------------------------------------------------ posts / reels
-    private fun post(code: String, h: Map<String, String>): List<String> {
+    private fun post(code: String, h: Map<String, String>): List<MediaItem> {
         var item = mediaInfo(shortcodeToId(code), h)
         if (item == null) item = mediaInfo(graphqlId(code, h), h) // private-profile fallback, same as the extension
         val it = item ?: return emptyList()
         val carousel = it.optJSONArray("carousel_media")
-        val out = mutableListOf<String>()
+        val user = it.optJSONObject("user")?.optString("username").orEmpty()
+        val cap = it.optJSONObject("caption")?.optString("text").orEmpty().lineSequence().firstOrNull().orEmpty()
+        val base = Names.clean(listOf(user, cap).filter { p -> p.isNotBlank() }.joinToString(" - ").ifBlank { "Instagram $code" })
+        val out = mutableListOf<MediaItem>()
         if (carousel != null) {
-            for (i in 0 until carousel.length()) mediaUrl(carousel.getJSONObject(i))?.let { u -> out.add(u) }
+            for (i in 0 until carousel.length()) mediaUrl(carousel.getJSONObject(i))?.let { u -> out.add(MediaItem(u, base)) }
         } else {
-            mediaUrl(it)?.let { u -> out.add(u) }
+            mediaUrl(it)?.let { u -> out.add(MediaItem(u, base)) }
         }
         return out
     }
@@ -82,7 +85,7 @@ object Instagram {
     }
 
     // ------------------------------------------------------------ stories / highlights
-    private fun stories(username: String, storyId: String, h: Map<String, String>): List<String> {
+    private fun stories(username: String, storyId: String, h: Map<String, String>): List<MediaItem> {
         val body = get("https://www.instagram.com/api/v1/users/web_profile_info/?username=" + URLEncoder.encode(username, "UTF-8"), h)
             ?: return emptyList()
         val uid = try { JSONObject(body).optJSONObject("data")?.optJSONObject("user")?.optString("id") } catch (_: Exception) { null }
@@ -90,18 +93,26 @@ object Instagram {
         return reel(uid, storyId, h)
     }
 
-    private fun reel(reelId: String, onlyId: String, h: Map<String, String>): List<String> {
+    private fun reel(reelId: String, onlyId: String, h: Map<String, String>): List<MediaItem> {
         val body = get("https://www.instagram.com/api/v1/feed/reels_media/?reel_ids=" + URLEncoder.encode(reelId, "UTF-8"), h)
             ?: return emptyList()
         return try {
-            val items = JSONObject(body).optJSONObject("reels")?.optJSONObject(reelId)?.optJSONArray("items")
-                ?: return emptyList()
+            val r = JSONObject(body).optJSONObject("reels")?.optJSONObject(reelId) ?: return emptyList()
+            val who = r.optJSONObject("user")?.optString("username").orEmpty()
+            val title = r.optString("title")
+            val items = r.optJSONArray("items") ?: return emptyList()
             val all = (0 until items.length()).map { items.getJSONObject(it) }
             // a story link with an id means "just this story"; otherwise take the whole reel
             val chosen = if (onlyId.isNotBlank() && !reelId.startsWith("highlight:")) {
                 all.filter { it.optString("pk") == onlyId || it.optString("id").startsWith("${onlyId}_") }.ifEmpty { all }
             } else all
-            chosen.mapNotNull { mediaUrl(it) }
+            chosen.mapNotNull { m ->
+                mediaUrl(m)?.let { u ->
+                    val name = if (reelId.startsWith("highlight:")) listOf(who, title).filter { p -> p.isNotBlank() }.joinToString(" - ")
+                    else "$who story ${Names.date(m.optLong("taken_at"))}"
+                    MediaItem(u, Names.clean(name.ifBlank { "Instagram story" }))
+                }
+            }
         } catch (_: Exception) { emptyList() }
     }
 

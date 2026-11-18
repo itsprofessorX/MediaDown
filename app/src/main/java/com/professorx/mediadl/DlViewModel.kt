@@ -16,6 +16,8 @@ import com.yausername.ffmpeg.FFmpeg
 import com.yausername.youtubedl_android.YoutubeDL
 import com.yausername.youtubedl_android.YoutubeDLRequest
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
@@ -106,6 +108,19 @@ class DlViewModel(private val app: Application) : AndroidViewModel(app) {
         prefs.edit().putString("history", arr.toString()).apply()
     }
 
+    private fun startFg() {
+        try {
+            Notifier.ensureChannels(app)
+            androidx.core.content.ContextCompat.startForegroundService(app, android.content.Intent(app, DownloadService::class.java))
+        } catch (_: Throwable) {}
+    }
+
+    private fun stopFg() {
+        try { app.stopService(android.content.Intent(app, DownloadService::class.java)) } catch (_: Throwable) {}
+    }
+
+    fun clearHistory() { history.clear(); saveHistory() }
+
     fun forceUpdate() { viewModelScope.launch(Dispatchers.IO) { if (ready && !busy) updateEngine() } }
 
     fun importCookies(src: Uri) {
@@ -140,8 +155,17 @@ class DlViewModel(private val app: Application) : AndroidViewModel(app) {
         val links = Regex("https?://[^\\s<>]+").findAll(url).map { it.value }.distinct().take(3).toList()
         if (links.isEmpty()) { status = "Please paste a valid link."; return }
         busy = true; cancelled = false; progress = 0f; indeterminate = true; stage = ""
+        startFg()
         viewModelScope.launch(Dispatchers.IO) {
             var ok = 0
+            val ticker = launch {
+                while (isActive) {
+                    val pct = (progress * 100).toInt()
+                    val tail = if (indeterminate) stage else "$pct%" + if (stage.isNotBlank()) " · $stage" else ""
+                    Notifier.updateProgress(app, "$status  $tail".trim(), pct, indeterminate)
+                    delay(700)
+                }
+            }
             for ((idx, link) in links.withIndex()) {
                 if (cancelled) break
                 status = if (links.size > 1) "Downloading ${idx + 1} of ${links.size}…" else "Downloading…"
@@ -152,6 +176,17 @@ class DlViewModel(private val app: Application) : AndroidViewModel(app) {
                 cancelled -> "Cancelled."
                 ok > 0 -> "✅ Saved $ok file(s) to your phone."
                 else -> lastError.ifBlank { "❌ Download failed." }
+            }
+            ticker.cancel()
+            stopFg()
+            Notifier.cancelProgress(app)
+            if (!cancelled) {
+                if (ok > 0) {
+                    val one = if (ok == 1) history.firstOrNull() else null
+                    Notifier.done(app, "Download complete", one?.name ?: "Saved $ok files to MediaDown", one?.uri, one?.mime)
+                } else {
+                    Notifier.done(app, "Download failed", status, null, null)
+                }
             }
             progress = 0f; indeterminate = false; stage = ""; busy = false
         }
@@ -170,7 +205,7 @@ class DlViewModel(private val app: Application) : AndroidViewModel(app) {
                 lastError = "🤔 No media found at that link."
             } catch (e: Throwable) {
                 if (cancelled) { dir.deleteRecursively(); return 0 }
-                val partial = saveAll(mediaFiles(dir))
+                val partial = saveAll(mediaFiles(dir, audio))
                 if (partial > 0) { dir.deleteRecursively(); return partial }
                 lastError = friendly(e)
             }
@@ -191,8 +226,7 @@ class DlViewModel(private val app: Application) : AndroidViewModel(app) {
 
     private suspend fun runYtDlp(link: String, audio: Boolean, dir: File): Int = engineLock.withLock {
         val req = YoutubeDLRequest(link).apply {
-            addOption("-o", "${dir.absolutePath}/%(id)s_%(autonumber)s.%(ext)s")
-            addOption("--restrict-filenames")
+            addOption("-o", "${dir.absolutePath}/%(title).100B%(playlist_index& - {}|)s.%(ext)s")
             addOption("--no-mtime")
             addOption("--newline")
             addOption("-i")
@@ -203,6 +237,9 @@ class DlViewModel(private val app: Application) : AndroidViewModel(app) {
                 addOption("-x")
                 addOption("--audio-format", "mp3")
                 addOption("--audio-quality", "0")
+                addOption("--embed-metadata")
+                addOption("--embed-thumbnail")
+                addOption("--convert-thumbnails", "jpg")
             } else {
                 addOption("-f", "best[ext=mp4]/best")
             }
@@ -227,21 +264,25 @@ class DlViewModel(private val app: Application) : AndroidViewModel(app) {
                 indeterminate = true
             }
         }
-        saveAll(mediaFiles(dir))
+        saveAll(mediaFiles(dir, audio))
     }
 
-    private fun runImages(link: String, dir: File): Int =
-        runUrls(Images.find(link, if (cookies.exists()) cookies else null), dir)
+    private fun runImages(link: String, dir: File): Int {
+        val urls = Images.find(link, if (cookies.exists()) cookies else null)
+        val base = Names.clean(Images.lastTitle.ifBlank { Names.fromLink(link) })
+        return runUrls(urls.map { MediaItem(it, base) }, dir)
+    }
 
     private fun runInstagram(link: String, dir: File): Int = runUrls(Instagram.resolve(link, cookies), dir)
 
-    private fun runUrls(urls: List<String>, dir: File): Int {
-        if (urls.isEmpty()) return 0
-        indeterminate = false; progress = 0f; stage = if (urls.size > 1) "${urls.size} items" else ""
+    private fun runUrls(items: List<MediaItem>, dir: File): Int {
+        if (items.isEmpty()) return 0
+        indeterminate = false; progress = 0f; stage = if (items.size > 1) "${items.size} items" else ""
         var n = 0
-        urls.forEachIndexed { i, u ->
-            val f = Images.download(u, dir, i) { frac ->
-                val v = (i + frac) / urls.size
+        items.forEachIndexed { i, item ->
+            val base = if (items.size > 1) "${item.name} - ${i + 1}" else item.name
+            val f = Images.download(item.url, dir, base) { frac ->
+                val v = (i + frac) / items.size
                 if (abs(v - progress) >= 0.01f) progress = v
             }
             if (f != null) { saveToGallery(f); n++ }
@@ -250,9 +291,10 @@ class DlViewModel(private val app: Application) : AndroidViewModel(app) {
         return n
     }
 
-    private fun mediaFiles(dir: File): List<File> =
+    private fun mediaFiles(dir: File, audio: Boolean = false): List<File> =
         dir.listFiles()?.filter {
-            it.isFile && !it.name.endsWith(".part") && !it.name.endsWith(".ytdl") && !it.name.endsWith(".json")
+            it.isFile && !it.name.endsWith(".part") && !it.name.endsWith(".ytdl") && !it.name.endsWith(".json") &&
+                (!audio || it.extension.lowercase() in setOf("mp3", "m4a", "ogg", "opus"))
         }.orEmpty().sortedBy { it.name }
 
     private fun saveAll(files: List<File>): Int {
@@ -283,7 +325,7 @@ class DlViewModel(private val app: Application) : AndroidViewModel(app) {
         val values = ContentValues().apply {
             put(MediaStore.MediaColumns.DISPLAY_NAME, f.name)
             put(MediaStore.MediaColumns.MIME_TYPE, mime)
-            put(MediaStore.MediaColumns.RELATIVE_PATH, "$folder/MediaDownloader")
+            put(MediaStore.MediaColumns.RELATIVE_PATH, "$folder/MediaDown")
             put(MediaStore.MediaColumns.IS_PENDING, 1)
         }
         val resolver = app.contentResolver

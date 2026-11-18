@@ -23,7 +23,12 @@ object Images {
     private val igDisplay = Regex("display_url\\\\*\"\\s*:\\s*\\\\*\"(https:[^\"]+?)\\\\*\"")
     private val igImg = Regex("<img[^>]+class=\"[^\"]*EmbeddedMediaImage[^\"]*\"[^>]*src=\"([^\"]+)\"", RegexOption.IGNORE_CASE)
 
+    @Volatile var lastTitle: String = ""
+    private val ogTitle = Regex("<meta[^>]+property=[\"']og:title[\"'][^>]*content=[\"']([^\"']*)[\"']", RegexOption.IGNORE_CASE)
+    private val titleTag = Regex("<title[^>]*>([^<]*)</title>", RegexOption.IGNORE_CASE)
+
     fun find(link: String, cookieFile: File? = null): List<String> {
+        lastTitle = ""
         val l = link.lowercase()
         if (direct.containsMatchIn(l)) return listOf(link)
         if ("twitter.com" in l || "x.com" in l) {
@@ -35,6 +40,7 @@ object Images {
             if (ig.isNotEmpty()) return ig
         }
         val html = http(link, UA_BOT) ?: return emptyList()
+        lastTitle = Names.decodeHtml(ogTitle.find(html)?.groupValues?.get(1) ?: titleTag.find(html)?.groupValues?.get(1) ?: "")
         return (og1.findAll(html) + og2.findAll(html))
             .map { it.groupValues[1].replace("&amp;", "&") }
             .map { if ("pinimg.com" in it) it.replace(pinSize, "/originals/") else it }
@@ -46,6 +52,7 @@ object Images {
     /** Tries several methods and keeps the one that finds the most full-size photos. */
     private fun instagram(link: String, cookieFile: File?): List<String> {
         val code = igCode.find(link)?.groupValues?.get(1) ?: return emptyList()
+        lastTitle = "Instagram $code"
         val cookie = cookieHeader(cookieFile)
         if (cookie != null) {
             val a = igApi(code, cookie)
@@ -157,7 +164,11 @@ object Images {
         val id = tweetId.find(link)?.groupValues?.get(1) ?: return null
         val body = http("https://api.fxtwitter.com/status/$id", UA_WEB) ?: return null
         return try {
-            val arr = JSONObject(body).optJSONObject("tweet")?.optJSONObject("media")?.optJSONArray("photos") ?: return null
+            val tweet = JSONObject(body).optJSONObject("tweet") ?: return null
+            val who = tweet.optJSONObject("author")?.optString("screen_name").orEmpty()
+            val text = tweet.optString("text").lineSequence().firstOrNull().orEmpty()
+            lastTitle = listOf(who, text).filter { p -> p.isNotBlank() }.joinToString(" - ")
+            val arr = tweet.optJSONObject("media")?.optJSONArray("photos") ?: return null
             List(arr.length()) { arr.getJSONObject(it).optString("url") }.filter { it.startsWith("http") }
         } catch (_: Exception) { null }
     }
@@ -172,13 +183,13 @@ object Images {
         if (c.responseCode !in 200..299) null else c.inputStream.bufferedReader().use { it.readText() }
     } catch (_: Exception) { null }
 
-    fun download(src: String, dir: File, i: Int, onProgress: (Float) -> Unit): File? {
-        var f = fetch(src, dir, i, onProgress)
-        if (f == null && "/originals/" in src) f = fetch(src.replace("/originals/", "/736x/"), dir, i, onProgress)
+    fun download(src: String, dir: File, base: String, onProgress: (Float) -> Unit): File? {
+        var f = fetch(src, dir, base, onProgress)
+        if (f == null && "/originals/" in src) f = fetch(src.replace("/originals/", "/736x/"), dir, base, onProgress)
         return f
     }
 
-    private fun fetch(src: String, dir: File, i: Int, onProgress: (Float) -> Unit): File? {
+    private fun fetch(src: String, dir: File, base: String, onProgress: (Float) -> Unit): File? {
         return try {
             val c = URL(src).openConnection() as HttpURLConnection
             c.connectTimeout = 15000; c.readTimeout = 25000
@@ -193,7 +204,7 @@ object Images {
                 "gif" in type -> "gif"
                 else -> "jpg"
             }
-            val out = File(dir, "item_${i + 1}.$ext")
+            val out = File(dir, "$base.$ext")
             val total = c.contentLengthLong
             var read = 0L
             c.inputStream.use { ins ->

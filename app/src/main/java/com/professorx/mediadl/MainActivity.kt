@@ -77,7 +77,8 @@ private val Accent = Color(0xFFFF3B4A)
 private val Good = Color(0xFF4ADE80)
 
 class MainActivity : ComponentActivity() {
-    private val vm: DlViewModel by viewModels()
+    private val vm: DlViewModel by lazy { (application as App).dl }
+    private val notifPerm = registerForActivityResult(ActivityResultContracts.RequestPermission()) { }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -85,6 +86,9 @@ class MainActivity : ComponentActivity() {
             statusBarStyle = SystemBarStyle.dark(android.graphics.Color.TRANSPARENT),
             navigationBarStyle = SystemBarStyle.dark(android.graphics.Color.TRANSPARENT)
         )
+        if (android.os.Build.VERSION.SDK_INT >= 33 &&
+            checkSelfPermission(android.Manifest.permission.POST_NOTIFICATIONS) != android.content.pm.PackageManager.PERMISSION_GRANTED
+        ) notifPerm.launch(android.Manifest.permission.POST_NOTIFICATIONS)
         handleShare(intent)
         setContent {
             MaterialTheme(
@@ -219,7 +223,12 @@ fun Screen(vm: DlViewModel) {
             }
         }
 
-        item { Text("Downloads", color = Muted, fontSize = 13.sp) }
+        item {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text("Downloads", color = Muted, fontSize = 13.sp, modifier = Modifier.weight(1f))
+                if (vm.history.isNotEmpty()) TextButton(onClick = { vm.clearHistory() }) { Text("Clear", color = Muted, fontSize = 13.sp) }
+            }
+        }
 
         if (vm.history.isEmpty()) {
             item { Text("Nothing yet.", color = Muted, fontSize = 14.sp) }
@@ -238,6 +247,10 @@ fun Screen(vm: DlViewModel) {
                     verticalAlignment = Alignment.CenterVertically
                 ) {
                     Text(s.name, color = Color.White, maxLines = 1, modifier = Modifier.weight(1f), fontSize = 14.sp)
+                    Text(
+                        "Share", color = Muted, fontSize = 13.sp,
+                        modifier = Modifier.clickable { shareSaved(ctx, s) }.padding(horizontal = 12.dp, vertical = 4.dp)
+                    )
                     Text("Open", color = Accent, fontSize = 13.sp)
                 }
                 Box(Modifier.fillMaxWidth().height(1.dp).background(Line))
@@ -318,4 +331,13 @@ fun BigButton(text: String, enabled: Boolean, onClick: () -> Unit) {
     ) {
         Text(text, color = if (enabled) Color.Black else Muted, fontSize = 17.sp, fontWeight = FontWeight.Bold)
     }
+}
+
+fun shareSaved(ctx: android.content.Context, s: Saved) {
+    try {
+        val i = Intent(Intent.ACTION_SEND).setType(s.mime)
+            .putExtra(Intent.EXTRA_STREAM, s.uri)
+            .addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+        ctx.startActivity(Intent.createChooser(i, "Share"))
+    } catch (_: Exception) {}
 }
